@@ -23,7 +23,7 @@ This Chrome extension hides posts on X.com/Twitter from accounts whose display n
 2. Search or scroll to find flag emojis. Check each flag you want to filter.
 3. Use the **Selected Flags** section to review your choices and remove any you no longer need.
 
-The current version removes matching posts from the timeline. The “block” mode toggle is included for future development and currently behaves the same as hide.
+When a match is found, the extension masks the tweet in place—replacing the display name with “Region blocked,” clearing the tweet body/media, and showing which flags triggered the filter. The “block” mode toggle is included for future development and currently behaves the same as hide.
 
 The **Blocked Counts** section updates in real time whenever a tweet is removed, so you can see which flags triggered filters the most.
 

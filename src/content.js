@@ -69,7 +69,8 @@ function startFiltering() {
     state.observer = new MutationObserver(handleMutations);
     state.observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      characterData: true
     });
   }
 
@@ -93,30 +94,61 @@ function filterExistingArticles() {
 
 function handleMutations(mutations) {
   for (const mutation of mutations) {
+    if (mutation.type === 'characterData') {
+      processClosestArticle(mutation.target);
+      continue;
+    }
+
     if (!mutation.addedNodes || mutation.addedNodes.length === 0) {
       continue;
     }
 
     for (const node of mutation.addedNodes) {
-      if (!(node instanceof HTMLElement)) {
-        continue;
-      }
-
-      if (node.matches && node.matches(ARTICLE_SELECTOR)) {
+      if (node instanceof HTMLElement && node.matches(ARTICLE_SELECTOR)) {
+        node.removeAttribute(PROCESSED_ATTR);
         processArticle(node);
-        continue;
-      }
-
-      const articles = node.querySelectorAll ? node.querySelectorAll(ARTICLE_SELECTOR) : [];
-      for (const article of articles) {
-        processArticle(article);
+      } else if (node instanceof HTMLElement) {
+        const articles = node.querySelectorAll(ARTICLE_SELECTOR);
+        for (const article of articles) {
+          article.removeAttribute(PROCESSED_ATTR);
+          processArticle(article);
+        }
+        processClosestArticle(node);
+      } else {
+        processClosestArticle(node);
       }
     }
   }
 }
 
+function processClosestArticle(node) {
+  let element = null;
+  if (node instanceof HTMLElement) {
+    element = node;
+  } else if (node && node.parentElement) {
+    element = node.parentElement;
+  }
+
+  if (!element || !element.closest) {
+    return;
+  }
+
+  const article = element.closest(ARTICLE_SELECTOR);
+  if (!article) {
+    return;
+  }
+
+  article.removeAttribute(PROCESSED_ATTR);
+  processArticle(article);
+}
+
 function processArticle(article) {
-  if (!article || article.hasAttribute(PROCESSED_ATTR)) {
+  if (!article) {
+    return;
+  }
+
+  const processedState = article.getAttribute(PROCESSED_ATTR);
+  if (processedState === 'blocked') {
     return;
   }
 
@@ -124,16 +156,20 @@ function processArticle(article) {
     return;
   }
 
-  article.setAttribute(PROCESSED_ATTR, 'checking');
-
   const displayNames = extractDisplayNames(article);
-  const matchedFlags = collectBlockedFlags(displayNames);
-  if (matchedFlags.size > 0) {
-    handleMatch(article, matchedFlags);
+  if (displayNames.length === 0) {
+    article.removeAttribute(PROCESSED_ATTR);
     return;
   }
 
-  article.setAttribute(PROCESSED_ATTR, 'true');
+  const matchedFlags = collectBlockedFlags(displayNames);
+  if (matchedFlags.size > 0) {
+    handleMatch(article, matchedFlags);
+    article.setAttribute(PROCESSED_ATTR, 'blocked');
+    return;
+  }
+
+  article.setAttribute(PROCESSED_ATTR, 'checked');
 }
 
 function extractDisplayNames(article) {
@@ -176,10 +212,10 @@ function handleMatch(article, matchedFlags) {
   switch (state.handlingMode) {
     case HANDLING_MODE.HIDE:
     default:
-      hideArticle(article);
+      maskArticle(article, matchedFlags);
       break;
     case HANDLING_MODE.BLOCK:
-      attemptBlock(article);
+      attemptBlock(article, matchedFlags);
       break;
   }
 }
@@ -194,9 +230,9 @@ function hideArticle(article) {
   tweetCell.remove();
 }
 
-function attemptBlock(article) {
+function attemptBlock(article, matchedFlags) {
   // Placeholder for a future implementation that would automate the block workflow.
-  hideArticle(article);
+  maskArticle(article, matchedFlags);
 }
 
 function incrementBlockCounts(flags) {
@@ -221,6 +257,69 @@ function incrementBlockCounts(flags) {
   chrome.storage.sync.set({
     flagBlockCounts: Object.fromEntries(nextCounts)
   });
+}
+
+function maskArticle(article, matchedFlags) {
+  const tweetCell =
+    article.closest('div[data-testid="cellInnerDiv"]') ||
+    article.closest('div[data-testid="tweetDetail"]') ||
+    article.closest('div[role="presentation"]') ||
+    article;
+
+  if (!tweetCell) {
+    return;
+  }
+
+  tweetCell.setAttribute('data-flag-filter-blocked', 'true');
+  tweetCell.style.pointerEvents = 'none';
+  tweetCell.style.opacity = '0.45';
+
+  const hiddenLabel = 'Region blocked';
+  const flagsList = Array.from(matchedFlags.values()).join(' ');
+  const reasonText = flagsList ? `Flags: ${flagsList}` : 'Flag filter applied';
+
+  const userNameContainer = tweetCell.querySelector('div[data-testid="User-Name"]');
+  if (userNameContainer) {
+    userNameContainer.innerHTML = '';
+    const span = document.createElement('span');
+    span.setAttribute('dir', 'auto');
+    span.textContent = hiddenLabel;
+    userNameContainer.appendChild(span);
+  }
+
+  const tweetTexts = tweetCell.querySelectorAll('div[data-testid="tweetText"], div[data-testid="tweetTextInline"]');
+  tweetTexts.forEach((node) => {
+    node.innerHTML = '';
+  });
+
+  const quotedSections = tweetCell.querySelectorAll('div[data-testid="tweet"]');
+  quotedSections.forEach((section) => {
+    if (section === article) {
+      return;
+    }
+    section.innerHTML = '';
+  });
+
+  const mediaNodes = tweetCell.querySelectorAll(
+    'img, video, div[data-testid="tweetPhoto"], div[data-testid="videoPlayer"], div[data-testid="card.wrapper"]'
+  );
+  mediaNodes.forEach((node) => {
+    node.remove();
+  });
+
+  let placeholder = tweetCell.querySelector('.flag-filter-placeholder');
+  if (!placeholder) {
+    placeholder = document.createElement('div');
+    placeholder.className = 'flag-filter-placeholder';
+    placeholder.style.fontSize = '13px';
+    placeholder.style.fontWeight = '500';
+    placeholder.style.padding = '12px 0';
+    placeholder.style.color = '#536471';
+    placeholder.textContent = reasonText;
+    tweetCell.appendChild(placeholder);
+  } else {
+    placeholder.textContent = reasonText;
+  }
 }
 
 function getTextContent(element) {
