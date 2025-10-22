@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Flag Filter for X",
+  "description": "Hide posts on X.com from users whose display names include selected flag emojis.",
+  "version": "1.0.0",
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_title": "Flag Filter Settings",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://www.x.com/*",
+        "https://twitter.com/*",
+        "https://mobile.twitter.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

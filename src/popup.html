@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Flag Filter</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Flag Filter</h1>
+        <p>Select the flags whose display names you want to hide on X.com.</p>
+      </header>
+
+      <section class="mode" aria-labelledby="mode-heading">
+        <h2 id="mode-heading">Action</h2>
+        <label>
+          <input type="radio" name="mode" value="hide" checked />
+          Hide posts from matching users
+        </label>
+        <label>
+          <input type="radio" name="mode" value="block" />
+          Attempt to block matching users (experimental)
+        </label>
+      </section>
+
+      <section class="search" aria-labelledby="search-heading">
+        <h2 id="search-heading">Find Flags</h2>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search by country name or code"
+          aria-label="Filter flags"
+        />
+      </section>
+
+      <section class="flags" aria-live="polite">
+        <ul id="flag-list"></ul>
+      </section>
+
+      <section class="selected" aria-labelledby="selected-heading">
+        <h2 id="selected-heading">Selected Flags</h2>
+        <div id="selected-flags" class="selected-flags"></div>
+      </section>
+
+      <section class="stats" aria-labelledby="stats-heading">
+        <h2 id="stats-heading">Blocked Counts</h2>
+        <p id="stats-empty" class="stats-empty">No flags blocked yet.</p>
+        <ul id="block-counts" class="block-counts"></ul>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
