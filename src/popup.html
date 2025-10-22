@@ -9,45 +9,102 @@
     <main>
       <header>
         <h1>Flag Filter</h1>
-        <p>Select the flags whose display names you want to hide on X.com.</p>
+        <p>Control which flags and users are muted on X.com.</p>
       </header>
 
-      <section class="mode" aria-labelledby="mode-heading">
-        <h2 id="mode-heading">Action</h2>
-        <label>
-          <input type="radio" name="mode" value="hide" checked />
-          Hide posts from matching users
-        </label>
-        <label>
-          <input type="radio" name="mode" value="block" />
-          Attempt to block matching users (experimental)
-        </label>
+      <nav class="tabs" role="tablist">
+        <button
+          class="tab active"
+          id="tab-overview-tab"
+          data-tab="overview"
+          role="tab"
+          aria-selected="true"
+        >
+          Overview
+        </button>
+        <button
+          class="tab"
+          id="tab-flags-tab"
+          data-tab="flags"
+          role="tab"
+          aria-selected="false"
+        >
+          Flags
+        </button>
+        <button
+          class="tab"
+          id="tab-users-tab"
+          data-tab="users"
+          role="tab"
+          aria-selected="false"
+        >
+          Users
+        </button>
+      </nav>
+
+      <section
+        id="tab-overview"
+        class="tab-panel active"
+        role="tabpanel"
+        aria-labelledby="tab-overview-tab"
+      >
+        <section class="mode" aria-labelledby="mode-heading">
+          <h2 id="mode-heading">Action</h2>
+          <label>
+            <input type="radio" name="mode" value="hide" checked />
+            Hide posts from matching users
+          </label>
+          <label>
+            <input type="radio" name="mode" value="block" />
+            Attempt to block matching users (experimental)
+          </label>
+        </section>
+
+        <section class="stats" aria-labelledby="stats-heading">
+          <h2 id="stats-heading">Blocked Counts</h2>
+          <p id="stats-empty" class="stats-empty">No flags blocked yet.</p>
+          <ul id="block-counts" class="block-counts"></ul>
+          <button id="reset-counts" type="button" class="reset-counts">Reset counts</button>
+        </section>
       </section>
 
-      <section class="search" aria-labelledby="search-heading">
-        <h2 id="search-heading">Find Flags</h2>
-        <input
-          id="search"
-          type="search"
-          placeholder="Search by country name or code"
-          aria-label="Filter flags"
-        />
+      <section
+        id="tab-flags"
+        class="tab-panel"
+        role="tabpanel"
+        aria-labelledby="tab-flags-tab"
+        hidden
+      >
+        <section class="search" aria-labelledby="search-heading">
+          <h2 id="search-heading">Find Flags</h2>
+          <input
+            id="search"
+            type="search"
+            placeholder="Search by country name or code"
+            aria-label="Filter flags"
+          />
+        </section>
+
+        <section class="flags" aria-live="polite">
+          <ul id="flag-list"></ul>
+        </section>
+
+        <section class="selected" aria-labelledby="selected-heading">
+          <h2 id="selected-heading">Selected Flags</h2>
+          <div id="selected-flags" class="selected-flags"></div>
+        </section>
       </section>
 
-      <section class="flags" aria-live="polite">
-        <ul id="flag-list"></ul>
-      </section>
-
-      <section class="selected" aria-labelledby="selected-heading">
-        <h2 id="selected-heading">Selected Flags</h2>
-        <div id="selected-flags" class="selected-flags"></div>
-      </section>
-
-      <section class="stats" aria-labelledby="stats-heading">
-        <h2 id="stats-heading">Blocked Counts</h2>
-        <p id="stats-empty" class="stats-empty">No flags blocked yet.</p>
-        <ul id="block-counts" class="block-counts"></ul>
-        <button id="reset-counts" type="button" class="reset-counts">Reset counts</button>
+      <section
+        id="tab-users"
+        class="tab-panel"
+        role="tabpanel"
+        aria-labelledby="tab-users-tab"
+        hidden
+      >
+        <h2 id="blocked-users-heading">Blocked Users</h2>
+        <p id="blocked-users-empty" class="users-empty">No users blocked yet.</p>
+        <ul id="blocked-user-list" class="blocked-user-list"></ul>
       </section>
     </main>
 
