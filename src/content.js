@@ -138,7 +138,15 @@ function processClosestArticle(node) {
     return;
   }
 
-  article.removeAttribute(PROCESSED_ATTR);
+  const status = article.getAttribute(PROCESSED_ATTR);
+  if (status === 'blocked' || status === 'processing') {
+    return;
+  }
+
+  if (status) {
+    article.removeAttribute(PROCESSED_ATTR);
+  }
+
   processArticle(article);
 }
 
@@ -148,13 +156,15 @@ function processArticle(article) {
   }
 
   const processedState = article.getAttribute(PROCESSED_ATTR);
-  if (processedState === 'blocked') {
+  if (processedState === 'blocked' || processedState === 'processing') {
     return;
   }
 
   if (state.selectedFlags.size === 0) {
     return;
   }
+
+  article.setAttribute(PROCESSED_ATTR, 'processing');
 
   const displayNames = extractDisplayNames(article);
   if (displayNames.length === 0) {
@@ -207,16 +217,20 @@ function collectBlockedFlags(displayNames) {
 }
 
 function handleMatch(article, matchedFlags) {
-  incrementBlockCounts(matchedFlags);
+  let applied = false;
 
   switch (state.handlingMode) {
     case HANDLING_MODE.HIDE:
     default:
-      maskArticle(article, matchedFlags);
+      applied = maskArticle(article, matchedFlags);
       break;
     case HANDLING_MODE.BLOCK:
-      attemptBlock(article, matchedFlags);
+      applied = attemptBlock(article, matchedFlags);
       break;
+  }
+
+  if (applied) {
+    incrementBlockCounts(matchedFlags);
   }
 }
 
@@ -232,7 +246,7 @@ function hideArticle(article) {
 
 function attemptBlock(article, matchedFlags) {
   // Placeholder for a future implementation that would automate the block workflow.
-  maskArticle(article, matchedFlags);
+  return maskArticle(article, matchedFlags);
 }
 
 function incrementBlockCounts(flags) {
@@ -267,59 +281,101 @@ function maskArticle(article, matchedFlags) {
     article;
 
   if (!tweetCell) {
-    return;
+    return false;
+  }
+
+  if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+    return false;
   }
 
   tweetCell.setAttribute('data-flag-filter-blocked', 'true');
-  tweetCell.style.pointerEvents = 'none';
   tweetCell.style.opacity = '0.45';
 
-  const hiddenLabel = 'Region blocked';
-  const flagsList = Array.from(matchedFlags.values()).join(' ');
-  const reasonText = flagsList ? `Flags: ${flagsList}` : 'Flag filter applied';
+  const flagsList = Array.from(matchedFlags.values());
+  const primaryFlag = flagsList[0] || '🏳️';
 
-  const userNameContainer = tweetCell.querySelector('div[data-testid="User-Name"]');
-  if (userNameContainer) {
-    userNameContainer.innerHTML = '';
-    const span = document.createElement('span');
-    span.setAttribute('dir', 'auto');
-    span.textContent = hiddenLabel;
-    userNameContainer.appendChild(span);
+  replaceAvatarWithBlockedFlag(tweetCell, primaryFlag);
+  updateBlockedUserName(article);
+  blankTweetBody(article);
+
+  return true;
+}
+
+function replaceAvatarWithBlockedFlag(tweetCell, flagEmoji) {
+  const avatarWrapper = tweetCell.querySelector('div[data-testid="Tweet-User-Avatar"]');
+  if (!avatarWrapper) {
+    return;
   }
 
-  const tweetTexts = tweetCell.querySelectorAll('div[data-testid="tweetText"], div[data-testid="tweetTextInline"]');
+  avatarWrapper.style.position = 'relative';
+
+  avatarWrapper.querySelectorAll('img').forEach((img) => {
+    img.style.visibility = 'hidden';
+    img.style.opacity = '0';
+  });
+
+  let badge = avatarWrapper.querySelector('.flag-filter-avatar-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.className = 'flag-filter-avatar-badge';
+    badge.style.position = 'absolute';
+    badge.style.top = '0';
+    badge.style.left = '0';
+    badge.style.width = '100%';
+    badge.style.height = '100%';
+    badge.style.display = 'flex';
+    badge.style.alignItems = 'center';
+    badge.style.justifyContent = 'center';
+    badge.style.fontSize = '22px';
+    badge.style.pointerEvents = 'none';
+    badge.style.textShadow = '0 0 2px rgba(0,0,0,0.45)';
+    avatarWrapper.appendChild(badge);
+  }
+
+  badge.innerHTML = '';
+
+  const flagSpan = document.createElement('span');
+  flagSpan.style.position = 'relative';
+  flagSpan.style.display = 'inline-flex';
+  flagSpan.style.alignItems = 'center';
+  flagSpan.style.justifyContent = 'center';
+  flagSpan.textContent = flagEmoji;
+
+  const crossSpan = document.createElement('span');
+  crossSpan.textContent = '🚫';
+  crossSpan.style.position = 'absolute';
+  crossSpan.style.top = '50%';
+  crossSpan.style.left = '50%';
+  crossSpan.style.transform = 'translate(-50%, -50%)';
+  crossSpan.style.fontSize = '18px';
+  crossSpan.style.pointerEvents = 'none';
+  flagSpan.appendChild(crossSpan);
+
+  badge.appendChild(flagSpan);
+}
+
+function updateBlockedUserName(article) {
+  const userNameContainer = article.querySelector('div[data-testid="User-Name"]');
+  if (!userNameContainer) {
+    return;
+  }
+  userNameContainer.innerHTML = '';
+  const span = document.createElement('span');
+  span.setAttribute('dir', 'auto');
+  span.textContent = 'Blocked By Flag Blocker';
+  userNameContainer.appendChild(span);
+}
+
+function blankTweetBody(article) {
+  const tweetTexts = article.querySelectorAll('div[data-testid="tweetText"], div[data-testid="tweetTextInline"]');
   tweetTexts.forEach((node) => {
     node.innerHTML = '';
+    const placeholder = document.createElement('span');
+    placeholder.textContent = ' ';
+    placeholder.style.whiteSpace = 'pre';
+    placeholder.className = 'flag-filter-blank';
+    node.appendChild(placeholder);
   });
-
-  const quotedSections = tweetCell.querySelectorAll('div[data-testid="tweet"]');
-  quotedSections.forEach((section) => {
-    if (section === article) {
-      return;
-    }
-    section.innerHTML = '';
-  });
-
-  const mediaNodes = tweetCell.querySelectorAll(
-    'img, video, div[data-testid="tweetPhoto"], div[data-testid="videoPlayer"], div[data-testid="card.wrapper"]'
-  );
-  mediaNodes.forEach((node) => {
-    node.remove();
-  });
-
-  let placeholder = tweetCell.querySelector('.flag-filter-placeholder');
-  if (!placeholder) {
-    placeholder = document.createElement('div');
-    placeholder.className = 'flag-filter-placeholder';
-    placeholder.style.fontSize = '13px';
-    placeholder.style.fontWeight = '500';
-    placeholder.style.padding = '12px 0';
-    placeholder.style.color = '#536471';
-    placeholder.textContent = reasonText;
-    tweetCell.appendChild(placeholder);
-  } else {
-    placeholder.textContent = reasonText;
-  }
 }
 
 function getTextContent(element) {
@@ -358,33 +414,40 @@ function flattenNodeText(node) {
 
 function gatherNameStrings(container, names) {
   const ariaLabel = container.getAttribute('aria-label');
-  if (ariaLabel) {
+  if (ariaLabel && !isFlagFilterPlaceholder(ariaLabel)) {
     names.add(ariaLabel);
   }
 
   container.querySelectorAll('[aria-label]').forEach((labelled) => {
     const value = labelled.getAttribute('aria-label');
-    if (value) {
+    if (value && !isFlagFilterPlaceholder(value)) {
       names.add(value);
     }
   });
 
   container.querySelectorAll('span[dir="auto"], div[dir="auto"]').forEach((node) => {
     const text = getTextContent(node);
-    if (text) {
+    if (text && !isFlagFilterPlaceholder(text)) {
       names.add(text);
     }
   });
 
   container.querySelectorAll('img[alt]').forEach((img) => {
     const alt = img.getAttribute('alt');
-    if (alt) {
+    if (alt && !isFlagFilterPlaceholder(alt)) {
       names.add(alt);
     }
   });
 
   const combined = getTextContent(container);
-  if (combined) {
+  if (combined && !isFlagFilterPlaceholder(combined)) {
     names.add(combined);
   }
+}
+
+function isFlagFilterPlaceholder(text) {
+  if (!text) {
+    return false;
+  }
+  return text.includes('Blocked By Flag Blocker') || text.includes('Blocked by Flag Blocker');
 }

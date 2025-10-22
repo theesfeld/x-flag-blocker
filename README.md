@@ -9,6 +9,7 @@ This Chrome extension hides posts on X.com/Twitter from accounts whose display n
 - Live filtering with MutationObserver ensures newly loaded tweets are checked automatically.
 - Running tally in the popup shows how many posts have been hidden for each flag emoji.
 - Includes a supplemental list of “meme flags” (Pride, Trans, Bisexual, Pan, Nonbinary, Asexual, Straight Ally, Swastika variants, Kekistan, Star of David, Star-and-Crescent, Cross, etc.) in addition to country flags.
+- Blocked tweets stay in-place but dim: avatar is replaced with the blocked flag (overlaid with a 🚫), the display name becomes “Blocked By Flag Blocker”, and the tweet body collapses to a blank space so the like/retweet/etc. controls remain usable.
 
 ## Getting Started
 
@@ -23,9 +24,9 @@ This Chrome extension hides posts on X.com/Twitter from accounts whose display n
 2. Search or scroll to find flag emojis. Check each flag you want to filter.
 3. Use the **Selected Flags** section to review your choices and remove any you no longer need.
 
-When a match is found, the extension masks the tweet in place—replacing the display name with “Region blocked,” clearing the tweet body/media, and showing which flags triggered the filter. The “block” mode toggle is included for future development and currently behaves the same as hide.
+When a match is found, the extension masks the tweet in place—switching the avatar/name as described above and blanking the tweet text with a single ASCII space while leaving the action bar intact. The “block” mode toggle is included for future development and currently behaves the same as hide.
 
-The **Blocked Counts** section updates in real time whenever a tweet is removed, so you can see which flags triggered filters the most.
+The **Blocked Counts** section updates in real time whenever a tweet is masked, so you can see which flags triggered filters the most. Use the **Reset counts** button to clear the tally if you want to start fresh.
 
 > **Note:** Meme flag entries use their commonly shared emoji or symbol strings. If you notice a community using a different variant, you can add it by editing `src/flags.js`.
 

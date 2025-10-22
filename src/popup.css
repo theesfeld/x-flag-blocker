@@ -152,3 +152,25 @@ section {
 .block-counts li:nth-child(odd) {
   background: #f7f9f9;
 }
+
+.reset-counts {
+  margin-top: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #cfd9de;
+  border-radius: 6px;
+  background: #f4212e;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reset-counts:hover {
+  background: #dc1d29;
+}
+
+.reset-counts:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

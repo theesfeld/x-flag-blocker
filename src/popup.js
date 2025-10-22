@@ -66,6 +66,7 @@ function cacheElements() {
   elements.modeRadios = Array.from(document.querySelectorAll('input[name="mode"]'));
   elements.blockCounts = document.getElementById('block-counts');
   elements.statsEmpty = document.getElementById('stats-empty');
+  elements.resetCounts = document.getElementById('reset-counts');
 }
 
 function attachEventListeners() {
@@ -92,6 +93,18 @@ function attachEventListeners() {
       }
       state.mode = radio.value;
       chrome.storage.sync.set({ handlingMode: state.mode });
+    });
+  });
+
+  elements.resetCounts.addEventListener('click', () => {
+    if (elements.resetCounts.disabled) {
+      return;
+    }
+    elements.resetCounts.disabled = true;
+    chrome.storage.sync.set({ flagBlockCounts: {} }, () => {
+      state.blockCounts = new Map();
+      renderBlockCounts();
+      renderSelectedFlags();
     });
   });
 }
@@ -192,6 +205,7 @@ function renderBlockCounts() {
 
   if (!state.blockCounts || state.blockCounts.size === 0) {
     elements.statsEmpty.hidden = false;
+    updateResetButtonState();
     return;
   }
 
@@ -203,6 +217,7 @@ function renderBlockCounts() {
 
   if (sorted.length === 0) {
     elements.statsEmpty.hidden = false;
+    updateResetButtonState();
     return;
   }
 
@@ -220,6 +235,8 @@ function renderBlockCounts() {
     listItem.appendChild(countSpan);
     elements.blockCounts.appendChild(listItem);
   }
+
+  updateResetButtonState();
 }
 
 function toFlagCountMap(raw) {
@@ -232,4 +249,12 @@ function toFlagCountMap(raw) {
     map.set(flag, numeric);
   }
   return map;
+}
+
+function updateResetButtonState() {
+  if (!elements.resetCounts) {
+    return;
+  }
+  const disabled = !state.blockCounts || state.blockCounts.size === 0;
+  elements.resetCounts.disabled = disabled;
 }
