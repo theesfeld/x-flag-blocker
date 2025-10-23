@@ -2,6 +2,8 @@
 
 This Chrome extension hides posts on X.com/Twitter from accounts whose display names include specific country flag emojis that you select.
 
+> **Note:** This project assumes you are comfortable loading unpacked extensions via `chrome://extensions`.
+
 ## Features
 
 - Choose one or more flag emojis to target using the popup UI.
@@ -34,8 +36,9 @@ The **Overview** tab shows the current handling mode plus the running tally of b
 
 ### Blocking Users Directly
 
-- Open the dropdown (>) that appears near the author name of any tweet to see that user’s score, flag history, and a block/unblock button.
-- Add nicknames or notes in the same dropdown—saved nicknames render inline next to the author everywhere they appear.
+- When a tweet is hidden, the replacement panel shows the user’s score/history, block/unblock action, and fields for notes or nicknames. Use it to manage the account without digging through popups.
+- Tap the **Flag Panel** button (present on every tweet) to open or close this panel; when it’s open, the tweet body is replaced with the management view.
+- Nicknames render inline next to the author everywhere they appear once saved in that panel.
 - Blocked users are tracked in the **Users** tab of the popup. You can review their metrics, stored notes, or unblock them from there. (Unblocking stops future masking; refresh the X page to restore any tweets already masked.)
 
 > **Note:** Meme flag entries use their commonly shared emoji or symbol strings. If you notice a community using a different variant, you can add it by editing `src/flags.js`.

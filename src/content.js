@@ -21,7 +21,6 @@ const state = {
   observer: null
 };
 
-let menuDismissListenerAttached = false;
 
 const ARTICLE_SELECTORS = [
   'article[data-testid="tweet"]',
@@ -69,11 +68,16 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     const updated = changes[SETTINGS_KEY.BLOCKED_USERS].newValue || [];
     state.blockedUsers = new Set(updated);
     filterExistingArticles();
+    updated.forEach((handle) => refreshBlockedPanels(handle));
   }
 
   if (changes[SETTINGS_KEY.USER_STATS]) {
-    state.userStats = toUserStatsMap(changes[SETTINGS_KEY.USER_STATS].newValue || {});
-    refreshAllUserMenus();
+    const updatedStats = changes[SETTINGS_KEY.USER_STATS].newValue || {};
+    state.userStats = toUserStatsMap(updatedStats);
+    Object.keys(updatedStats || {}).forEach((handle) => {
+      refreshNicknameForHandle(handle);
+      refreshBlockedPanels(handle);
+    });
   }
 
   if (changes.flagBlockCounts) {
@@ -110,6 +114,9 @@ function rerunFiltering() {
 
 function filterExistingArticles() {
   const articles = document.querySelectorAll(ARTICLE_SELECTOR);
+  for (const article of articles) {
+    article.removeAttribute(PROCESSED_ATTR);
+  }
   for (const article of articles) {
     processArticle(article);
   }
@@ -212,26 +219,28 @@ function processArticle(article) {
     }
   }
 
-  ensureUserMenu(tweetCell, handle);
-  applyNickname(article, handle);
-
   if (handle && state.blockedUsers.has(handle)) {
-    maskArticle(article, new Set());
+    maskArticle(article, new Set(), handle);
     article.setAttribute(PROCESSED_ATTR, 'blocked');
-    updateUserMenuForHandle(tweetCell, handle);
     return;
   }
 
   if (state.selectedFlags.size === 0) {
+    clearBlockedAppearance(tweetCell, article);
     article.setAttribute(PROCESSED_ATTR, 'checked');
-    updateUserMenuForHandle(tweetCell, handle);
+    ensureControlButton(article, tweetCell, handle);
+    applyNickname(article, handle);
+    syncPanelIfNeeded(article, tweetCell, handle);
     return;
   }
 
   const displayNames = extractDisplayNames(article);
   if (displayNames.length === 0) {
     article.removeAttribute(PROCESSED_ATTR);
-    updateUserMenuForHandle(tweetCell, handle);
+    clearBlockedAppearance(tweetCell, article);
+    ensureControlButton(article, tweetCell, handle);
+    applyNickname(article, handle);
+    syncPanelIfNeeded(article, tweetCell, handle);
     return;
   }
 
@@ -239,14 +248,16 @@ function processArticle(article) {
   if (matchedFlags.size > 0) {
     handleMatch(article, matchedFlags, handle);
     article.setAttribute(PROCESSED_ATTR, 'blocked');
-    updateUserMenuForHandle(tweetCell, handle);
-    applyNickname(article, handle);
+    ensureControlButton(article, tweetCell, handle);
+    syncPanelIfNeeded(article, tweetCell, handle);
     return;
   }
 
   article.setAttribute(PROCESSED_ATTR, 'checked');
-  updateUserMenuForHandle(tweetCell, handle);
+  clearBlockedAppearance(tweetCell, article);
+  ensureControlButton(article, tweetCell, handle);
   applyNickname(article, handle);
+  syncPanelIfNeeded(article, tweetCell, handle);
 }
 
 function extractUserHandle(article) {
@@ -354,10 +365,10 @@ function handleMatch(article, matchedFlags, handle) {
   switch (state.handlingMode) {
     case HANDLING_MODE.HIDE:
     default:
-      applied = maskArticle(article, matchedFlags);
+      applied = maskArticle(article, matchedFlags, handle);
       break;
     case HANDLING_MODE.BLOCK:
-      applied = attemptBlock(article, matchedFlags);
+      applied = attemptBlock(article, matchedFlags, handle);
       break;
   }
 
@@ -365,7 +376,6 @@ function handleMatch(article, matchedFlags, handle) {
     incrementBlockCounts(matchedFlags);
     if (handle) {
       recordFlagMatch(handle, matchedFlags);
-      updateUserMenuForHandle(getTweetCell(article), handle);
     }
   }
 }
@@ -380,9 +390,9 @@ function hideArticle(article) {
   tweetCell.remove();
 }
 
-function attemptBlock(article, matchedFlags) {
+function attemptBlock(article, matchedFlags, handle = '') {
   // Placeholder for a future implementation that would automate the block workflow.
-  return maskArticle(article, matchedFlags);
+  return maskArticle(article, matchedFlags, handle);
 }
 
 function incrementBlockCounts(flags) {
@@ -421,7 +431,7 @@ function getTweetCell(article) {
   );
 }
 
-function maskArticle(article, matchedFlags) {
+function maskArticle(article, matchedFlags, handle = '') {
   const tweetCell = getTweetCell(article);
 
   if (!tweetCell) {
@@ -439,15 +449,23 @@ function maskArticle(article, matchedFlags) {
 
   tweetCell.dataset.flagFilterFlags = flagsList.join(' ');
   tweetCell.dataset.flagFilterPrimaryFlag = primaryFlag;
-  tweetCell.dataset.flagFilterRevealed = 'false';
+  if (!tweetCell.dataset.flagFilterExposed) {
+    tweetCell.dataset.flagFilterExposed = 'false';
+  }
   tweetCell.style.opacity = '0.45';
+  tweetCell.style.border = '2px solid #003153';
+  tweetCell.style.borderRadius = '12px';
+  tweetCell.style.background = '#003153';
 
   replaceAvatarWithBlockedFlag(tweetCell, primaryFlag);
   updateBlockedUserName(article);
   blankTweetBody(article);
   hideTweetMedia(article);
-  ensureRevealControls(tweetCell, article);
-  applyNickname(article, article?.dataset?.flagFilterHandle || tweetCell?.dataset?.flagFilterHandle || '');
+
+  const effectiveHandle = sanitizeHandle(handle || article?.dataset?.flagFilterHandle || tweetCell?.dataset?.flagFilterHandle || '');
+  applyNickname(article, effectiveHandle);
+  ensureControlButton(article, tweetCell, effectiveHandle);
+  setPanelExposure(article, tweetCell, effectiveHandle, tweetCell.dataset.flagFilterExposed === 'true');
 
   return true;
 }
@@ -585,22 +603,24 @@ function blankTweetBody(article) {
     if (!node.dataset.flagFilterOriginalContent) {
       node.dataset.flagFilterOriginalContent = node.innerHTML;
     }
+    if (!node.dataset.flagFilterOriginalDisplay) {
+      node.dataset.flagFilterOriginalDisplay = node.style.display || '';
+    }
     node.innerHTML = '';
-    const placeholder = document.createElement('span');
-    placeholder.textContent = ' ';
-    placeholder.style.whiteSpace = 'pre';
-    placeholder.className = 'flag-filter-blank';
-    node.appendChild(placeholder);
+    node.style.display = 'none';
   });
 }
 
 function hideTweetMedia(article) {
   const mediaNodes = article.querySelectorAll(
-    'img, video, div[data-testid="tweetPhoto"], div[data-testid="videoPlayer"], div[data-testid="card.wrapper"]'
+    'img, video, div[data-testid="tweetPhoto"], div[data-testid="videoPlayer"], div[data-testid="card.wrapper"], div[data-testid="tweet"]'
   );
 
   mediaNodes.forEach((node) => {
     if (node.closest('div[data-testid="Tweet-User-Avatar"]')) {
+      return;
+    }
+    if (isFlagFilterUiElement(node) || (node.closest && node.closest(`[${FLAG_FILTER_UI_ATTR}="true"]`))) {
       return;
     }
     if (!node.dataset.flagFilterMediaHidden) {
@@ -620,6 +640,368 @@ function restoreTweetMedia(article) {
     delete node.dataset.flagFilterMediaDisplay;
   });
 }
+
+function clearBlockedAppearance(tweetCell, article) {
+  if (!tweetCell || tweetCell.getAttribute('data-flag-filter-blocked') !== 'true') {
+    return;
+  }
+
+  restoreAvatar(tweetCell);
+  restoreUserName(article);
+  restoreTweetBody(article);
+  restoreTweetMedia(article);
+  showOriginalBody(article);
+
+  tweetCell.style.opacity = '';
+  tweetCell.style.border = '';
+  tweetCell.style.borderRadius = '';
+  tweetCell.style.background = '';
+  tweetCell.removeAttribute('data-flag-filter-blocked');
+  delete tweetCell.dataset.flagFilterExposed;
+
+  const panel = tweetCell.querySelector('.flag-filter-panel');
+  if (panel) {
+    panel.remove();
+  }
+}
+
+function ensureControlButton(article, tweetCell, handle) {
+  if (!tweetCell || !article) {
+    return;
+  }
+
+  const sanitizedHandle = sanitizeHandle(handle || article.dataset.flagFilterHandle || tweetCell.dataset.flagFilterHandle || '');
+  let toggleButton = article.querySelector('.flag-filter-toggle');
+  if (!toggleButton) {
+    toggleButton = document.createElement('button');
+    toggleButton.type = 'button';
+    toggleButton.className = 'flag-filter-toggle';
+    toggleButton.style.border = '1px solid transparent';
+    toggleButton.style.background = 'transparent';
+    toggleButton.style.color = '#536471';
+    toggleButton.style.fontSize = '11px';
+    toggleButton.style.fontWeight = '600';
+    toggleButton.style.padding = '0 4px';
+    toggleButton.style.cursor = 'pointer';
+    toggleButton.style.display = 'inline-flex';
+    toggleButton.style.alignItems = 'center';
+    toggleButton.style.justifyContent = 'center';
+    toggleButton.style.gap = '2px';
+    toggleButton.style.position = 'absolute';
+    toggleButton.style.top = '4px';
+    toggleButton.style.right = '8px';
+    toggleButton.style.zIndex = '3';
+    toggleButton.style.backgroundClip = 'padding-box';
+    toggleButton.style.borderRadius = '999px';
+    markFlagFilterUi(toggleButton);
+    article.appendChild(toggleButton);
+  }
+
+  const exposed = tweetCell.dataset.flagFilterExposed === 'true';
+  toggleButton.textContent = exposed ? '×' : '⚑';
+  toggleButton.title = exposed ? 'Close Flag Panel' : 'Open Flag Panel';
+  toggleButton.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextState = !(tweetCell.dataset.flagFilterExposed === 'true');
+    setPanelExposure(article, tweetCell, sanitizedHandle, nextState);
+    toggleButton.textContent = nextState ? '×' : '⚑';
+    toggleButton.title = nextState ? 'Close Flag Panel' : 'Open Flag Panel';
+  };
+}
+
+function getBodyNodes(article) {
+  return article.querySelectorAll(
+    'div[data-testid="tweetText"], div[data-testid="tweetTextInline"], div[data-testid="tweetPhoto"], div[data-testid="card.wrapper"], div[data-testid="videoPlayer"], div[data-testid="tweet"], img:not([data-flag-filter-ui="true"]), video:not([data-flag-filter-ui="true"])'
+  );
+}
+
+function hideOriginalBodyForPanel(article) {
+  const bodyNodes = getBodyNodes(article);
+  bodyNodes.forEach((node) => {
+    if (isFlagFilterUiElement(node) || node.closest(`[${FLAG_FILTER_UI_ATTR}="true"]`)) {
+      return;
+    }
+    if (node.closest && node.closest('div[data-testid="Tweet-User-Avatar"]')) {
+      return;
+    }
+    if (!node.dataset.flagFilterPanelHidden) {
+      node.dataset.flagFilterPanelHidden = 'true';
+      node.dataset.flagFilterPanelDisplay = node.style.display || '';
+    }
+    node.style.display = 'none';
+  });
+}
+
+function showOriginalBody(article) {
+  article.querySelectorAll('[data-flag-filter-panel-hidden="true"]').forEach((node) => {
+    const original = node.dataset.flagFilterPanelDisplay || '';
+    node.style.display = original;
+    delete node.dataset.flagFilterPanelHidden;
+    delete node.dataset.flagFilterPanelDisplay;
+  });
+}
+
+function syncPanelIfNeeded(article, tweetCell, handle) {
+  if (!tweetCell || tweetCell.dataset.flagFilterExposed !== 'true') {
+    return;
+  }
+
+  const sanitizedHandle = sanitizeHandle(handle || article.dataset.flagFilterHandle || tweetCell.dataset.flagFilterHandle || '');
+
+  if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+    renderInlinePanel(article, tweetCell, sanitizedHandle);
+  } else {
+    hideOriginalBodyForPanel(article);
+    renderInlinePanel(article, tweetCell, sanitizedHandle);
+  }
+}
+
+function setPanelExposure(article, tweetCell, handle, exposed) {
+  if (!tweetCell || !article) {
+    return;
+  }
+
+  const sanitizedHandle = sanitizeHandle(handle || article.dataset.flagFilterHandle || tweetCell.dataset.flagFilterHandle || '');
+  tweetCell.dataset.flagFilterExposed = exposed ? 'true' : 'false';
+
+  if (exposed) {
+    if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+      // Blocked tweets already have blank content; leave as-is.
+    } else {
+      hideOriginalBodyForPanel(article);
+    }
+    renderInlinePanel(article, tweetCell, sanitizedHandle);
+  } else {
+    const panel = article.querySelector('.flag-filter-panel');
+    if (panel) {
+      panel.remove();
+    }
+
+    showOriginalBody(article);
+
+    if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+      blankTweetBody(article);
+      hideTweetMedia(article);
+      tweetCell.style.opacity = '0.45';
+      tweetCell.style.border = '2px solid #003153';
+      tweetCell.style.borderRadius = '12px';
+      tweetCell.style.background = '#003153';
+    }
+  }
+
+  ensureControlButton(article, tweetCell, sanitizedHandle);
+}
+
+function renderInlinePanel(article, tweetCell, handle) {
+  const sanitizedHandle = sanitizeHandle(handle);
+  const isBlocked = tweetCell.getAttribute('data-flag-filter-blocked') === 'true';
+  const flagsLabel = tweetCell.dataset.flagFilterFlags || '';
+  const stats = getUserStats(sanitizedHandle);
+
+  let panel = article.querySelector('.flag-filter-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.className = 'flag-filter-panel';
+    panel.style.display = 'flex';
+    panel.style.flexDirection = 'column';
+    panel.style.gap = '8px';
+    panel.style.padding = '12px';
+    panel.style.margin = '6px 0';
+    panel.style.background = 'rgba(15, 20, 25, 0.9)';
+    panel.style.color = '#f7f9f9';
+    panel.style.borderRadius = '12px';
+    panel.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+    panel.style.backdropFilter = 'blur(6px)';
+    panel.style.position = 'relative';
+    panel.style.zIndex = '2';
+    markFlagFilterUi(panel);
+    const controlBar = article.querySelector('.flag-filter-control-bar');
+    if (controlBar && controlBar.nextSibling) {
+      article.insertBefore(panel, controlBar.nextSibling);
+    } else if (controlBar) {
+      article.appendChild(panel);
+    } else if (article.firstChild) {
+      article.insertBefore(panel, article.firstChild);
+    } else {
+      article.appendChild(panel);
+    }
+  }
+
+  panel.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.textContent = sanitizedHandle ? `@${sanitizedHandle}` : 'Flag Blocker';
+  title.style.fontWeight = '600';
+  title.style.fontSize = '14px';
+  markFlagFilterUi(title);
+  panel.appendChild(title);
+
+  if (stats.nickname) {
+    const nicknameLine = document.createElement('div');
+    nicknameLine.textContent = `Nickname: ${stats.nickname}`;
+    nicknameLine.style.fontSize = '12px';
+    nicknameLine.style.color = '#1d9bf0';
+    markFlagFilterUi(nicknameLine);
+    panel.appendChild(nicknameLine);
+  }
+
+  const scoreLine = document.createElement('div');
+  scoreLine.textContent = `Score: ${computeUserScore(stats, isBlocked)}`;
+  scoreLine.style.fontSize = '12px';
+  markFlagFilterUi(scoreLine);
+  panel.appendChild(scoreLine);
+
+  const statusLine = document.createElement('div');
+  statusLine.textContent = isBlocked ? 'Status: blocked' : 'Status: allowed';
+  statusLine.style.fontSize = '12px';
+  statusLine.style.color = isBlocked ? '#f91880' : '#36c5f0';
+  markFlagFilterUi(statusLine);
+  panel.appendChild(statusLine);
+
+  if (flagsLabel) {
+    const flagsLine = document.createElement('div');
+    flagsLine.textContent = `Blocked flags: ${flagsLabel}`;
+    flagsLine.style.fontSize = '12px';
+    markFlagFilterUi(flagsLine);
+    panel.appendChild(flagsLine);
+  } else if (isBlocked) {
+    const manualLine = document.createElement('div');
+    manualLine.textContent = 'Blocked manually';
+    manualLine.style.fontSize = '12px';
+    markFlagFilterUi(manualLine);
+    panel.appendChild(manualLine);
+  }
+
+  if (stats.flagMatches > 0) {
+    const historyLine = document.createElement('div');
+    historyLine.textContent = `Flag matches recorded: ${stats.flagMatches}${stats.flags.size ? ` (${formatFlagsList(stats.flags)})` : ''}`;
+    historyLine.style.fontSize = '12px';
+    markFlagFilterUi(historyLine);
+    panel.appendChild(historyLine);
+  }
+
+  const actionsRow = document.createElement('div');
+  actionsRow.style.display = 'flex';
+  actionsRow.style.flexWrap = 'wrap';
+  actionsRow.style.gap = '8px';
+  markFlagFilterUi(actionsRow);
+  panel.appendChild(actionsRow);
+
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.textContent = 'Close Panel';
+  closeButton.style.padding = '6px 12px';
+  closeButton.style.border = 'none';
+  closeButton.style.borderRadius = '999px';
+  closeButton.style.fontSize = '12px';
+  closeButton.style.fontWeight = '600';
+  closeButton.style.cursor = 'pointer';
+  closeButton.style.background = '#536471';
+  closeButton.style.color = '#ffffff';
+  markFlagFilterUi(closeButton);
+  closeButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setPanelExposure(article, tweetCell, sanitizedHandle, false);
+  });
+  actionsRow.appendChild(closeButton);
+
+  if (sanitizedHandle) {
+    const blockButton = document.createElement('button');
+    blockButton.type = 'button';
+    blockButton.textContent = isBlocked ? 'Unblock user' : 'Block user';
+    blockButton.style.padding = '6px 12px';
+    blockButton.style.border = 'none';
+    blockButton.style.borderRadius = '999px';
+    blockButton.style.fontSize = '12px';
+    blockButton.style.fontWeight = '600';
+    blockButton.style.cursor = 'pointer';
+    blockButton.style.background = isBlocked ? '#536471' : '#f4212e';
+    blockButton.style.color = '#ffffff';
+    markFlagFilterUi(blockButton);
+    blockButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setUserBlocked(sanitizedHandle, !isBlocked);
+    });
+    actionsRow.appendChild(blockButton);
+  }
+
+  if (sanitizedHandle) {
+    const annotationForm = document.createElement('div');
+    annotationForm.style.display = 'flex';
+    annotationForm.style.flexDirection = 'column';
+    annotationForm.style.gap = '6px';
+    markFlagFilterUi(annotationForm);
+    panel.appendChild(annotationForm);
+
+    const nicknameLabel = document.createElement('label');
+    nicknameLabel.textContent = 'Nickname';
+    nicknameLabel.style.fontSize = '12px';
+    markFlagFilterUi(nicknameLabel);
+    annotationForm.appendChild(nicknameLabel);
+
+    const nicknameInput = document.createElement('input');
+    nicknameInput.type = 'text';
+    nicknameInput.value = stats.nickname || '';
+    nicknameInput.placeholder = 'Add nickname';
+    nicknameInput.maxLength = 40;
+    nicknameInput.style.width = '100%';
+    nicknameInput.style.padding = '6px 8px';
+    nicknameInput.style.borderRadius = '6px';
+    nicknameInput.style.border = '1px solid rgba(255,255,255,0.2)';
+    nicknameInput.style.background = 'rgba(255,255,255,0.12)';
+    nicknameInput.style.color = '#f7f9f9';
+    nicknameInput.style.fontSize = '12px';
+    markFlagFilterUi(nicknameInput);
+    annotationForm.appendChild(nicknameInput);
+
+    const noteLabel = document.createElement('label');
+    noteLabel.textContent = 'Notes';
+    noteLabel.style.fontSize = '12px';
+    markFlagFilterUi(noteLabel);
+    annotationForm.appendChild(noteLabel);
+
+    const noteArea = document.createElement('textarea');
+    noteArea.value = stats.note || '';
+    noteArea.placeholder = 'Add context or reminders…';
+    noteArea.rows = 3;
+    noteArea.maxLength = 500;
+    noteArea.style.width = '100%';
+    noteArea.style.padding = '6px 8px';
+    noteArea.style.borderRadius = '6px';
+    noteArea.style.border = '1px solid rgba(255,255,255,0.2)';
+    noteArea.style.background = 'rgba(255,255,255,0.12)';
+    noteArea.style.color = '#f7f9f9';
+    noteArea.style.fontSize = '12px';
+    markFlagFilterUi(noteArea);
+    annotationForm.appendChild(noteArea);
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.textContent = 'Save note & nickname';
+    saveButton.style.alignSelf = 'flex-start';
+    saveButton.style.padding = '6px 12px';
+    saveButton.style.border = 'none';
+    saveButton.style.borderRadius = '999px';
+    saveButton.style.fontSize = '12px';
+    saveButton.style.fontWeight = '600';
+    saveButton.style.cursor = 'pointer';
+    saveButton.style.background = '#1d9bf0';
+    saveButton.style.color = '#ffffff';
+    markFlagFilterUi(saveButton);
+    saveButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      updateUserAnnotations(sanitizedHandle, nicknameInput.value.trim(), noteArea.value.trim());
+      renderInlinePanel(article, tweetCell, sanitizedHandle);
+    });
+    annotationForm.appendChild(saveButton);
+  }
+}
+
+
 
 function restoreAvatar(tweetCell) {
   const avatarWrapper = tweetCell.querySelector('div[data-testid="Tweet-User-Avatar"]');
@@ -675,96 +1057,18 @@ function restoreTweetBody(article) {
   tweetTexts.forEach((node) => {
     if (node.dataset.flagFilterOriginalContent !== undefined) {
       node.innerHTML = node.dataset.flagFilterOriginalContent;
+      node.style.display = node.dataset.flagFilterOriginalDisplay || '';
+    }
+    delete node.dataset.flagFilterOriginalDisplay;
+    const placeholder = node.querySelector('.flag-filter-blank');
+    if (placeholder) {
+      placeholder.remove();
     }
   });
 }
 
-function ensureRevealControls(tweetCell, article) {
-  if (!tweetCell) {
-    return;
-  }
 
-  let controls = tweetCell.querySelector('.flag-filter-controls');
-  if (!controls) {
-    controls = document.createElement('div');
-    controls.className = 'flag-filter-controls';
-    controls.style.marginTop = '8px';
-    controls.style.padding = '6px 8px';
-    controls.style.borderRadius = '8px';
-    controls.style.background = 'rgba(15, 20, 25, 0.08)';
-    controls.style.display = 'flex';
-    controls.style.alignItems = 'center';
-    controls.style.justifyContent = 'space-between';
-    controls.style.gap = '8px';
-    markFlagFilterUi(controls);
 
-    const info = document.createElement('span');
-    info.className = 'flag-filter-controls-info';
-    info.style.fontSize = '12px';
-    info.style.color = '#536471';
-    markFlagFilterUi(info);
-
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'flag-filter-controls-button';
-    button.style.padding = '4px 10px';
-    button.style.borderRadius = '999px';
-    button.style.border = 'none';
-    button.style.fontSize = '12px';
-    button.style.fontWeight = '600';
-    button.style.cursor = 'pointer';
-    button.style.background = '#1d9bf0';
-    button.style.color = '#ffffff';
-    markFlagFilterUi(button);
-
-    controls.appendChild(info);
-    controls.appendChild(button);
-    tweetCell.appendChild(controls);
-  }
-
-  const info = controls.querySelector('.flag-filter-controls-info');
-  const button = controls.querySelector('.flag-filter-controls-button');
-
-  const flagsLabel = tweetCell.dataset.flagFilterFlags || '';
-  info.textContent = flagsLabel ? `Blocked flags: ${flagsLabel}` : 'Blocked manually';
-
-  const revealed = tweetCell.dataset.flagFilterRevealed === 'true';
-  button.textContent = revealed ? 'Hide post' : 'Show post';
-  button.style.background = revealed ? '#536471' : '#1d9bf0';
-
-  button.onclick = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    toggleReveal(tweetCell, article, !revealed);
-  };
-}
-
-function toggleReveal(tweetCell, article, shouldReveal) {
-  if (!tweetCell || !article) {
-    return;
-  }
-
-  if (shouldReveal) {
-    tweetCell.dataset.flagFilterRevealed = 'true';
-    tweetCell.style.opacity = '1';
-    restoreAvatar(tweetCell);
-    restoreUserName(article);
-    restoreTweetBody(article);
-    restoreTweetMedia(article);
-    applyNickname(article, article?.dataset?.flagFilterHandle || tweetCell?.dataset?.flagFilterHandle || '');
-  } else {
-    tweetCell.dataset.flagFilterRevealed = 'false';
-    tweetCell.style.opacity = '0.45';
-    const primaryFlag = tweetCell.dataset.flagFilterPrimaryFlag || '🚫';
-    replaceAvatarWithBlockedFlag(tweetCell, primaryFlag);
-    updateBlockedUserName(article);
-    blankTweetBody(article);
-    hideTweetMedia(article);
-    applyNickname(article, article?.dataset?.flagFilterHandle || tweetCell?.dataset?.flagFilterHandle || '');
-  }
-
-  ensureRevealControls(tweetCell, article);
-}
 
 function getTextContent(element) {
   if (!element) {
@@ -966,6 +1270,7 @@ function updateUserAnnotations(handle, nickname, note) {
   stats.note = nextNote;
   persistUserStats();
   refreshNicknameForHandle(handle);
+  refreshBlockedPanels(handle);
 }
 
 function getNickname(handle) {
@@ -986,264 +1291,34 @@ function refreshNicknameForHandle(handle) {
   });
 }
 
-function ensureUserMenu(tweetCell, handle) {
-  handle = sanitizeHandle(handle);
-  if (!tweetCell || !handle) {
+function refreshBlockedPanels(handle) {
+  const sanitizedHandle = sanitizeHandle(handle);
+  if (!sanitizedHandle) {
     return;
   }
 
-  let wrapper = tweetCell.querySelector('.flag-filter-menu');
-  if (wrapper && wrapper.tagName !== 'SPAN') {
-    wrapper.remove();
-    wrapper = null;
-  }
-  if (!wrapper) {
-    wrapper = createUserMenuWrapper(tweetCell, handle);
-    if (!wrapper) {
+  document.querySelectorAll(`${ARTICLE_SELECTOR}[data-flag-filter-handle="${sanitizedHandle}"]`).forEach((article) => {
+    const tweetCell = getTweetCell(article);
+    if (!tweetCell) {
       return;
     }
-  }
-
-  wrapper.dataset.handle = handle;
-  renderUserMenuPanel(wrapper, handle);
-}
-
-function createUserMenuWrapper(tweetCell, handle) {
-  const nameContainer = tweetCell.querySelector('div[data-testid="User-Name"]');
-  if (!nameContainer) {
-    return null;
-  }
-
-  const wrapper = document.createElement('span');
-  wrapper.className = 'flag-filter-menu';
-  wrapper.style.display = 'inline-flex';
-  wrapper.style.alignItems = 'center';
-  wrapper.style.position = 'relative';
-  wrapper.style.marginRight = '6px';
-  wrapper.dataset.handle = handle;
-  markFlagFilterUi(wrapper);
-
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = 'flag-filter-menu-trigger';
-  trigger.textContent = '>';
-  trigger.style.border = '1px solid rgba(83, 100, 113, 0.35)';
-  trigger.style.background = 'rgba(255, 255, 255, 0.12)';
-  trigger.style.color = '#536471';
-  trigger.style.width = '20px';
-  trigger.style.height = '20px';
-  trigger.style.borderRadius = '999px';
-  trigger.style.cursor = 'pointer';
-  trigger.style.fontSize = '12px';
-  trigger.style.lineHeight = '1';
-  trigger.style.display = 'inline-flex';
-  trigger.style.alignItems = 'center';
-  trigger.style.justifyContent = 'center';
-  trigger.style.marginRight = '4px';
-  trigger.style.transition = 'background 0.2s ease, color 0.2s ease';
-  trigger.setAttribute('aria-label', 'Open Flag Filter menu');
-  markFlagFilterUi(trigger);
-
-  trigger.addEventListener('mouseenter', () => {
-    trigger.style.background = 'rgba(29, 155, 240, 0.15)';
-    trigger.style.color = '#1d9bf0';
-  });
-  trigger.addEventListener('mouseleave', () => {
-    if (wrapper.querySelector('.flag-filter-menu-panel')?.dataset.open === 'true') {
-      return;
+    const exposed = tweetCell.dataset.flagFilterExposed === 'true';
+    if (exposed) {
+      if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+        renderInlinePanel(article, tweetCell, sanitizedHandle);
+      } else {
+        hideOriginalBodyForPanel(article);
+        renderInlinePanel(article, tweetCell, sanitizedHandle);
+      }
+    } else if (tweetCell.getAttribute('data-flag-filter-blocked') === 'true') {
+      blankTweetBody(article);
+      hideTweetMedia(article);
+      tweetCell.style.opacity = '0.45';
+      tweetCell.style.border = '2px solid #003153';
+      tweetCell.style.borderRadius = '12px';
+      tweetCell.style.background = '#003153';
     }
-    trigger.style.background = 'rgba(255, 255, 255, 0.12)';
-    trigger.style.color = '#536471';
-  });
-
-  const panel = document.createElement('div');
-  panel.className = 'flag-filter-menu-panel';
-  panel.style.display = 'none';
-  panel.style.position = 'absolute';
-  panel.style.top = 'calc(100% + 6px)';
-  panel.style.right = '0';
-  panel.style.zIndex = '1000';
-  panel.style.minWidth = '220px';
-  panel.style.maxWidth = '260px';
-  panel.style.background = '#0f1419';
-  panel.style.color = '#f7f9f9';
-  panel.style.borderRadius = '12px';
-  panel.style.padding = '12px';
-  panel.style.boxShadow = '0 12px 24px rgba(15, 20, 25, 0.35)';
-  panel.style.maxHeight = '320px';
-  panel.style.overflowY = 'auto';
-  panel.dataset.open = 'false';
-  markFlagFilterUi(panel);
-
-  trigger.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    toggleMenuPanel(wrapper);
-  });
-
-  wrapper.appendChild(trigger);
-  wrapper.appendChild(panel);
-  nameContainer.insertBefore(wrapper, nameContainer.firstChild);
-
-  attachMenuDismissListener();
-
-  return wrapper;
-}
-
-function renderUserMenuPanel(wrapper, handle) {
-  handle = sanitizeHandle(handle);
-  if (!wrapper || !handle) {
-    return;
-  }
-
-  const panel = wrapper.querySelector('.flag-filter-menu-panel');
-  if (!panel) {
-    return;
-  }
-
-  const stats = getUserStats(handle);
-  const isBlocked = state.blockedUsers.has(handle);
-  const score = computeUserScore(stats, isBlocked);
-
-  panel.innerHTML = '';
-
-  const title = document.createElement('div');
-  title.textContent = `@${handle}`;
-  title.style.fontWeight = '600';
-  title.style.fontSize = '13px';
-  markFlagFilterUi(title);
-  panel.appendChild(title);
-
-  const scoreRow = document.createElement('div');
-  scoreRow.textContent = `Score: ${score}`;
-  scoreRow.style.marginTop = '6px';
-  scoreRow.style.fontSize = '12px';
-  markFlagFilterUi(scoreRow);
-  panel.appendChild(scoreRow);
-
-  if (stats.flagMatches > 0) {
-    const flagRow = document.createElement('div');
-    flagRow.style.fontSize = '12px';
-    flagRow.style.marginTop = '6px';
-    const flagsSummary = stats.flags.size ? ` (${formatFlagsList(stats.flags)})` : '';
-    flagRow.textContent = `Flag matches: ${stats.flagMatches}${flagsSummary}`;
-    markFlagFilterUi(flagRow);
-    panel.appendChild(flagRow);
-  }
-
-  if (stats.manualBlocks > 0) {
-    const manualRow = document.createElement('div');
-    manualRow.style.fontSize = '12px';
-    manualRow.style.marginTop = '4px';
-    manualRow.textContent = `Manual blocks: ${stats.manualBlocks}`;
-    markFlagFilterUi(manualRow);
-    panel.appendChild(manualRow);
-  }
-
-  const statusRow = document.createElement('div');
-  statusRow.style.marginTop = '8px';
-  statusRow.style.fontSize = '12px';
-  statusRow.style.color = isBlocked ? '#f91880' : '#36c5f0';
-  statusRow.textContent = isBlocked ? 'Status: blocked' : 'Status: allowed';
-  markFlagFilterUi(statusRow);
-  panel.appendChild(statusRow);
-
-  const actionButton = document.createElement('button');
-  actionButton.type = 'button';
-  actionButton.textContent = isBlocked ? 'Unblock user' : 'Block user';
-  actionButton.style.marginTop = '10px';
-  actionButton.style.width = '100%';
-  actionButton.style.padding = '6px 0';
-  actionButton.style.border = 'none';
-  actionButton.style.borderRadius = '999px';
-  actionButton.style.fontSize = '12px';
-  actionButton.style.fontWeight = '600';
-  actionButton.style.cursor = 'pointer';
-  actionButton.style.background = isBlocked ? '#536471' : '#f4212e';
-  actionButton.style.color = '#ffffff';
-  markFlagFilterUi(actionButton);
-  actionButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setUserBlocked(handle, !isBlocked);
-    closeAllMenus();
-  });
-  panel.appendChild(actionButton);
-
-  const divider = document.createElement('div');
-  divider.style.margin = '12px 0 8px';
-  divider.style.height = '1px';
-  divider.style.background = 'rgba(255, 255, 255, 0.15)';
-  markFlagFilterUi(divider);
-  panel.appendChild(divider);
-
-  const nicknameLabel = document.createElement('label');
-  nicknameLabel.textContent = 'Nickname';
-  nicknameLabel.style.display = 'block';
-  nicknameLabel.style.fontSize = '12px';
-  nicknameLabel.style.marginBottom = '4px';
-  markFlagFilterUi(nicknameLabel);
-  panel.appendChild(nicknameLabel);
-
-  const nicknameInput = document.createElement('input');
-  nicknameInput.type = 'text';
-  nicknameInput.value = stats.nickname || '';
-  nicknameInput.placeholder = 'Add nickname';
-  nicknameInput.maxLength = 40;
-  nicknameInput.style.width = '100%';
-  nicknameInput.style.padding = '6px 8px';
-  nicknameInput.style.borderRadius = '6px';
-  nicknameInput.style.border = '1px solid rgba(255,255,255,0.2)';
-  nicknameInput.style.background = 'rgba(255,255,255,0.1)';
-  nicknameInput.style.color = '#f7f9f9';
-  nicknameInput.style.fontSize = '12px';
-  markFlagFilterUi(nicknameInput);
-  panel.appendChild(nicknameInput);
-
-  const noteLabel = document.createElement('label');
-  noteLabel.textContent = 'Notes';
-  noteLabel.style.display = 'block';
-  noteLabel.style.fontSize = '12px';
-  noteLabel.style.margin = '10px 0 4px';
-  markFlagFilterUi(noteLabel);
-  panel.appendChild(noteLabel);
-
-  const noteArea = document.createElement('textarea');
-  noteArea.value = stats.note || '';
-  noteArea.placeholder = 'Add context or reminders…';
-  noteArea.rows = 3;
-  noteArea.maxLength = 500;
-  noteArea.style.width = '100%';
-  noteArea.style.padding = '6px 8px';
-  noteArea.style.borderRadius = '6px';
-  noteArea.style.border = '1px solid rgba(255,255,255,0.2)';
-  noteArea.style.background = 'rgba(255,255,255,0.1)';
-  noteArea.style.color = '#f7f9f9';
-  noteArea.style.fontSize = '12px';
-  markFlagFilterUi(noteArea);
-  panel.appendChild(noteArea);
-
-  const saveNoteButton = document.createElement('button');
-  saveNoteButton.type = 'button';
-  saveNoteButton.textContent = 'Save note & nickname';
-  saveNoteButton.style.marginTop = '10px';
-  saveNoteButton.style.width = '100%';
-  saveNoteButton.style.padding = '6px 0';
-  saveNoteButton.style.border = 'none';
-  saveNoteButton.style.borderRadius = '999px';
-  saveNoteButton.style.fontSize = '12px';
-  saveNoteButton.style.fontWeight = '600';
-  saveNoteButton.style.cursor = 'pointer';
-  saveNoteButton.style.background = '#1d9bf0';
-  saveNoteButton.style.color = '#ffffff';
-  markFlagFilterUi(saveNoteButton);
-  panel.appendChild(saveNoteButton);
-
-  saveNoteButton.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    updateUserAnnotations(handle, nicknameInput.value.trim(), noteArea.value.trim());
-    renderUserMenuPanel(wrapper, handle);
+    ensureControlButton(article, tweetCell, sanitizedHandle);
   });
 }
 
@@ -1269,98 +1344,9 @@ function formatFlagsList(flags) {
   return Array.from(flags.values()).join(' ');
 }
 
-function updateUserMenuForHandle(tweetCell, handle) {
-  if (!tweetCell || !handle) {
-    return;
-  }
 
-  const wrapper = tweetCell.querySelector('.flag-filter-menu');
-  if (wrapper) {
-    wrapper.dataset.handle = handle;
-    renderUserMenuPanel(wrapper, handle);
-  }
-}
 
-function refreshAllUserMenus() {
-  document.querySelectorAll('.flag-filter-menu').forEach((wrapper) => {
-    const handle = wrapper.dataset.handle;
-    if (handle) {
-      renderUserMenuPanel(wrapper, handle);
-    }
-  });
-}
 
-function toggleMenuPanel(wrapper) {
-  if (!wrapper) {
-    return;
-  }
-
-  const panel = wrapper.querySelector('.flag-filter-menu-panel');
-  const trigger = wrapper.querySelector('.flag-filter-menu-trigger');
-  if (!panel) {
-    return;
-  }
-
-  const isOpen = panel.dataset.open === 'true';
-  closeAllMenus();
-
-  if (isOpen) {
-    panel.dataset.open = 'false';
-    panel.style.display = 'none';
-    if (trigger) {
-      trigger.style.background = 'rgba(255, 255, 255, 0.12)';
-      trigger.style.color = '#536471';
-    }
-  } else {
-    panel.dataset.open = 'true';
-    panel.style.display = 'block';
-    if (trigger) {
-      trigger.style.background = 'rgba(29, 155, 240, 0.15)';
-      trigger.style.color = '#1d9bf0';
-    }
-    positionMenuPanel(wrapper, panel);
-  }
-}
-
-function closeAllMenus() {
-  document.querySelectorAll('.flag-filter-menu-panel').forEach((panel) => {
-    panel.dataset.open = 'false';
-    panel.style.display = 'none';
-    panel.style.left = 'auto';
-    panel.style.right = '0';
-    const wrapper = panel.parentElement;
-    if (wrapper && wrapper.classList.contains('flag-filter-menu')) {
-      const trigger = wrapper.querySelector('.flag-filter-menu-trigger');
-      if (trigger) {
-        trigger.style.background = 'rgba(255, 255, 255, 0.12)';
-        trigger.style.color = '#536471';
-      }
-    }
-  });
-}
-
-function positionMenuPanel(wrapper, panel) {
-  if (!wrapper || !panel) {
-    return;
-  }
-
-  panel.style.right = '0';
-  panel.style.left = 'auto';
-
-  const rect = panel.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-
-  if (rect.right > viewportWidth - 8) {
-    const overflow = rect.right - (viewportWidth - 8);
-    panel.style.right = `${overflow}px`;
-  }
-
-  const rectAfterRight = panel.getBoundingClientRect();
-  if (rectAfterRight.left < 8) {
-    panel.style.right = 'auto';
-    panel.style.left = `${Math.max(0, 8 - rectAfterRight.left)}px`;
-  }
-}
 
 function markFlagFilterUi(element) {
   if (!element || typeof element.setAttribute !== 'function') {
@@ -1395,21 +1381,6 @@ function isFlagFilterUiNode(node) {
   return false;
 }
 
-function attachMenuDismissListener() {
-  if (menuDismissListenerAttached) {
-    return;
-  }
-
-  document.addEventListener('click', (event) => {
-    if (event.target.closest('.flag-filter-menu')) {
-      return;
-    }
-    closeAllMenus();
-  });
-
-  menuDismissListenerAttached = true;
-}
-
 function setUserBlocked(handle, shouldBlock) {
   handle = sanitizeHandle(handle);
   if (!handle) {
@@ -1440,11 +1411,9 @@ function setUserBlocked(handle, shouldBlock) {
     [SETTINGS_KEY.BLOCKED_USERS]: Array.from(nextBlocked)
   });
 
-  refreshAllUserMenus();
+  filterExistingArticles();
 
-  if (shouldBlock) {
-    filterExistingArticles();
-  }
+  refreshBlockedPanels(handle);
 }
 
 function persistUserStats() {
